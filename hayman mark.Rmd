@@ -1,0 +1,161 @@
+---
+title: "Snow cover impacts on watershed discharge "
+author: "John Kemper"
+date: "9/10/2019"
+output:
+  html_document:
+    toc: TRUE
+    toc_depth: 4
+    toc_float: TRUE
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# How do remotely sensed snow cover metrics impact discharge in the same water year in *central* Colorado?
+
+## Data checking
+
+### Data read in
+First we need to get our snow metric (ndsi) data and then also download discharge data from the USGS
+
+```{r warning = FALSE, message = FALSE}
+library(tidyverse) 
+library(lubridate)
+library(dataRetrieval) #for downloading USGS data
+
+
+#ndsi 
+ndsi <- read_csv('hayman_data/hayman_ndsi.csv') %>%
+  rename(burned=2,unburned=3) %>%
+  filter(!is.na(burned),
+         !is.na(unburned)) %>%
+  gather(.,key='site',
+         value='ndsi',
+         -DateTime) # For this analysis we want the data in long format
+  
+  
+#USGS gauge above cheeseman lake '00060'
+q_hayman <- readNWISdata(sites=c('06700000'), #Site code 
+                  parameterCd='00060', #discharge code in cfs
+                  service='dv', # service = daily values (versus annual)
+                  startDate='1984-10-01', #Start date for getting the data
+                  endDate = '2019-9-10') %>% # End date (today) 
+  rename(q_cfs = X_00060_00003,
+         quality_cd = X_00060_00003_cd) %>% #rename long column name
+  filter(!is.na(q_cfs)) %>% #Drop NAs which can occur when there is ice or sensor breaks
+  as_tibble() #To make it act like a tibble
+
+```
+
+### Data exploring 
+
+NDSI summary
+
+```{r, warning = FALSE, echo = FALSE}
+
+summary(ndsi)
+```
+
+## Q summary
+
+```{r, warning= FALSE, echo = FALSE}
+
+summary(q_hayman)
+```
+
+## Combining the data
+
+# Adding a water year column
+
+When analyzing water flux data, we typically break the year up into “water years” which run from October to the end of September. For this exploratory analysis, we want to group the datasets by water year and then join them to each other so we can compare winter average, max, median, etc… of snow cover versus the next water year’s water flux. So we have to add a column called water year
+
+### Q water year
+```{r, warning = FALSE}
+
+q_water_year <- q_hayman %>%
+  mutate(month=month(dateTime),
+         year_offset = ifelse(month > 9,1,0),
+         wtr_yr = year(dateTime) + year_offset)
+
+table(q_water_year$wtr_yr)
+
+```
+
+### NDSI Water Year
+
+```{r}
+ndsi_water_year <- ndsi %>%
+  mutate(month=month(DateTime),
+         year_offset = ifelse(month > 9,1,0),
+         wtr_yr = year(DateTime) + year_offset)
+
+table(ndsi_water_year$wtr_yr)
+
+```
+
+## Filtering and summarizing
+
+Now that we have our matched datasets we want to do a couple filtering operations. First, we want to make sure that we are only analyzing complete water years from the Q dataset. Second, we want to make sure we are only summarizing the snow data over months where snow cover is possible, which I would guess is between october and may. Once we have these filtering operations done, we want to summarize each dataset by water year so we can eventually join them and see if snow cover predicts Q.
+
+### Snow water year summary statistics
+
+```{r, echo = FALSE}
+snow_means <- ndsi_water_year %>%
+  filter(month %in% c(10:12, 1:5)) %>%
+  group_by(wtr_yr) %>%
+  summarize(mean_ndsi = mean(ndsi),
+            max_ndsi = max(ndsi),
+            median_ndsi = median(ndsi))
+snow_means
+```
+
+
+### Whole Q water year summaries
+```{r, echo = FALSE}
+q_means <- q_water_year %>%
+  group_by(wtr_yr) %>%
+  mutate(count = n()) %>%
+  ungroup() %>%
+  filter(count == max(count)) %>%
+  group_by(wtr_yr) %>%
+  summarize(mean_q = mean(q_cfs),
+            max_q = max(q_cfs),
+            median_q = median(q_cfs))
+
+q_means
+```
+
+# Plots of Snow Cover vs Q
+
+## Mean Snow vs Median Q
+
+```{r, echo = FALSE}
+
+snow_q <- inner_join(snow_means, q_means, by = "wtr_yr")
+
+
+snow_q %>%
+  ggplot(., aes(x = mean_ndsi, y = median_q, color = wtr_yr)) +
+  geom_point(size = 2) +
+  scale_color_continuous() +
+  xlab("Mean Snow Cover") +
+  ylab("Median Discharge (cfs)") 
+```
+
+## Max Snow vs Mean Q
+
+```{r, echo = FALSE}
+
+snow_q %>%
+  ggplot(., aes(x = max_ndsi, y = mean_q, color = wtr_yr)) +
+  geom_point(size = 2) +
+  scale_color_continuous() +
+  xlab("Max Snow Cover") +
+  ylab("Mean Discharge (cfs)") 
+
+```
+
